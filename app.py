@@ -130,12 +130,20 @@ hr { border-color: #1f2235 !important; }
 # ── DATA INGESTION ───────────────────────────────────────
 @st.cache_resource(show_spinner="🔍 Loading program data...")
 def build_vectorstore():
-    # Auto-download brochure if not present
+    docs = []  # always initialized first
+
+    # Auto-download brochure if not present (for Streamlit Cloud)
     if not os.path.exists("brochure.pdf"):
-        brochure_url = "https://files.mastersunion.link/MasterUnion/PGP_Applied_AI_and_Agentic_Systems_Brochure.pdf"
-        resp = requests.get(brochure_url, timeout=60)
-        with open("brochure.pdf", "wb") as f:
-            f.write(resp.content)
+        try:
+            pdf_url = "https://files.mastersunion.link/MasterUnion/PGP_Applied_AI_and_Agentic_Systems_Brochure.pdf"
+            r = requests.get(pdf_url, timeout=60)
+            if r.status_code == 200:
+                with open("brochure.pdf", "wb") as f:
+                    f.write(r.content)
+        except Exception as e:
+            st.warning(f"Could not download brochure: {e}")
+
+    # Scrape web pages via Jina
     for url in PROGRAM_URLS:
         try:
             resp = requests.get(
@@ -144,7 +152,6 @@ def build_vectorstore():
                 timeout=30
             )
             if resp.status_code == 200:
-                # Strip nav boilerplate lines (pure markdown nav links)
                 lines = resp.text.split('\n')
                 filtered = [
                     line for line in lines
@@ -159,14 +166,22 @@ def build_vectorstore():
         except Exception as e:
             st.warning(f"Could not scrape {url}: {e}")
 
-
+    # Load PDF if available
     if os.path.exists("brochure.pdf"):
-        docs += PyMuPDFLoader("brochure.pdf").load()
+        try:
+            docs += PyMuPDFLoader("brochure.pdf").load()
+        except Exception as e:
+            st.warning(f"Could not load brochure: {e}")
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=80)
+    if not docs:
+        st.error("❌ No data loaded. Check URLs and brochure.")
+        st.stop()
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.split_documents(docs)
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     return Chroma.from_documents(chunks, embeddings, persist_directory=DB_DIR)
+
 
 # ── RAG CHAIN ────────────────────────────────────────────
 @st.cache_resource(show_spinner="⚙️ Initializing AI...")
